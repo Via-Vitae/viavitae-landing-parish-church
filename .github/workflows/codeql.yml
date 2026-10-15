@@ -1,7 +1,9 @@
 name: CodeQL
 
-# CodeQL static application security testing for Python and TypeScript/JavaScript,
-# the two languages present across ViaVitae repositories.
+# CodeQL static application security testing. The languages analysed are detected
+# from the files present in the repository (see the `detect` job), so a repository
+# never fails a scan for a language it does not contain, and adding a language needs
+# no edit to this file.
 #
 # Query suite: security-and-quality — the security queries plus the maintainability
 # and reliability queries. It is configured inline here rather than through a
@@ -44,15 +46,45 @@ concurrency:
   group: "codeql-${{ github.workflow }}-${{ github.ref }}-${{ github.event_name }}"
   cancel-in-progress: false
 
-env:
-  # Language matrix. Add a language here and the rest of the pipeline follows.
-  # Supported: python, javascript-typescript, go, java-kotlin, csharp, ruby,
-  # swift, cpp, actions.
-  CODEQL_LANGUAGES: "python,javascript-typescript"
-
 jobs:
+  detect:
+    name: Detect languages
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      languages: ${{ steps.detect.outputs.languages }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Detect present languages
+        id: detect
+        run: |
+          set -euo pipefail
+          langs=()
+          if find . -type f \( -name '*.py' -o -name '*.pyi' \) \
+             -not -path './.venv/*' -not -path './.github/*' -print -quit | grep -q .; then
+            langs+=("python")
+            echo "Python files found"
+          else
+            echo "No Python files"
+          fi
+          if find . -type f \( -name '*.js' -o -name '*.jsx' -o -name '*.ts' -o -name '*.tsx' \) \
+             -not -path './node_modules/*' -not -path './.github/*' -print -quit | grep -q .; then
+            langs+=("javascript-typescript")
+            echo "JavaScript/TypeScript files found"
+          else
+            echo "No JavaScript/TypeScript files"
+          fi
+          if [ ${#langs[@]} -eq 0 ]; then
+            echo "No scannable source files — CodeQL will complete with a no-op."
+            langs=("none")
+          fi
+          printf 'languages=%s\n' "$(jq -cn --args '$ARGS.positional' "${langs[@]}")" >> "$GITHUB_OUTPUT"
+
   analyze:
     name: Analyze (${{ matrix.language }})
+    needs: detect
+    if: needs.detect.outputs.languages != '["none"]'
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -66,7 +98,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ["python", "javascript-typescript"]
+        language: ${{ fromJson(needs.detect.outputs.languages) }}
         # build-mode:
         #   none   — no compilation step; correct for Python and JS/TS.
         #   manual — run your own build commands between init and analyze.
